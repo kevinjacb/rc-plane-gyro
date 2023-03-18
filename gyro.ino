@@ -161,7 +161,7 @@ void calculatePID(float desiredYaw, float desiredPitch, float desiredRoll)
     out[3] = channels[3]; //+ rudderPID; // yaw pid disabled for now
 }
 
-void mapChannels(int &desiredRoll, int &desiredPitch, int &desiredYaw)
+void mapChannels(float &desiredRoll, float &desiredPitch, float &desiredYaw)
 {
     // map channels to control surfaces
 
