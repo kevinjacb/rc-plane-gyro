@@ -13,7 +13,7 @@
 Servo aileron, elevator, throttle, rudder;
 MPU9250 mpu;
 
-const float Kp = 0.1, Ki = 0.1, Kd = 0.1; // PID constants
+const float Kp = 3, Ki = 0.1, Kd = 1; // PID constants
 
 bool isEnabled = false;
 
@@ -83,11 +83,11 @@ long last_print = 0, last_write = 0;
 
 void loop()
 {
-    // if (millis() - last_print > 1000)
-    // {
-    //     last_print = millis();
-    //     printChannels();
-    // }
+    if (millis() - last_print > 1000)
+    {
+        last_print = millis();
+        printChannels();
+    }
     float desiredYaw, desiredPitch, desiredRoll;
 
     if (millis() - last_write > 10)
@@ -103,20 +103,23 @@ void loop()
 
 void updateOutput()
 {
-    aileron.writeMicroseconds(channels[0]);
-    elevator.writeMicroseconds(channels[1]);
-    throttle.writeMicroseconds(channels[2]);
-    rudder.writeMicroseconds(channels[3]);
+    aileron.writeMicroseconds(out[0]);
+    elevator.writeMicroseconds(out[1]);
+    throttle.writeMicroseconds(out[2]);
+    rudder.writeMicroseconds(out[3]);
 }
 
 void printChannels()
 {
     for (int i = 0; i < 10; i++)
     {
-        Serial.print(channels[i]);
+        Serial.print(out[i]);
         Serial.print(" ");
     }
-    Serial.println();
+    Serial.print("Is enabled: ");
+    Serial.println(isEnabled);
+    Serial.print("pid: ");
+    Serial.println(aileronPID);
 }
 
 void getAngles() // get angles/direction from sensor
@@ -151,17 +154,17 @@ void calculatePID(float desiredYaw, float desiredPitch, float desiredRoll)
     // rudderPID = yawError * Kp + (yaw - prevYaw) * Kd + (yawError * Ki); // yaw pid disabled for now
 
     // constrain PID values
-    aileronPID = constrain(aileronPID, 1000, 2000);
-    elevatorPID = constrain(elevatorPID, 1000, 2000);
+    // aileronPID = constrain(aileronPID, 1000, 2000);
+    // elevatorPID = constrain(elevatorPID, 1000, 2000);
     // rudderPID = constrain(rudderPID, 1000, 2000); // yaw pid disabled for now
 
     // write PID values to output
-    out[0] = channels[0] + (isEnabled) ? aileronPID : 0;
-    out[1] = channels[1] + (isEnabled) ? elevatorPID : 0;
+    out[0] = channels[0] + ((isEnabled) ? aileronPID : 0);
+    out[1] = channels[1] + ((isEnabled) ? elevatorPID : 0);
     out[3] = channels[3]; //+ rudderPID; // yaw pid disabled for now
 }
 
-void mapChannels(int &desiredRoll, int &desiredPitch, int &desiredYaw)
+void mapChannels(float &desiredRoll, float &desiredPitch, float &desiredYaw)
 {
     // map channels to control surfaces
 
