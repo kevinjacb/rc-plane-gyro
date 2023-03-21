@@ -12,25 +12,25 @@
 #include <Wire.h>
 #include <EEPROM.h>
 
-#define DEBUG_EN 0 // enable debug mode
-#define DEBUG(x) Serial.println(x)
-#define BL_EN 1 // enable bluetooth mode
+// #define DEBUG_EN 0 // enable debug mode
+// #define DEBUG(x) Serial.println(x)
+// #define BL_EN 1 // enable bluetooth mode
 
 Servo aileron, elevator, throttle, rudder;
 MPU9250 mpu;
 
 float Kp = 10, Ki = 0, Kd = 3; // PID constants
 
-bool isEnabled = false;
-bool testControlSurfaces = false;
-bool invertAileron = false, invertElevator = false, invertRudder = false;
-bool sendData = true; // send data over bluetooth
+byte isEnabled = 0;
+byte testControlSurfaces = 0;
+byte invertAileron = 0, invertElevator = 0, invertRudder = 0;
+byte sendData = 1; // send data over bluetooth
 
 float yaw,
     pitch, roll, prevYaw, prevPitch, prevRoll;
-int aileronPID, elevatorPID, rudderPID;
+uint16_t aileronPID, elevatorPID, rudderPID;
 
-bool writeToEEPROM = false;
+byte writeToEEPROM = 0;
 unsigned long lastWriteEEPROM = 0;
 
 float batteryPercent = 0;
@@ -47,16 +47,23 @@ float batteryPercent = 0;
     channel 8 - aux 4
 
     */
-unsigned int channels[10] = {1500, 1500, 1000, 1500, 1500, 1500, 1500, 1500, 1500, 1500}; // Note:  ppm can only use 8 channels
-int c_channel = -1;
 
-unsigned int out[10] = {1500, 1500, 1000, 1500, 1500, 1500, 1500, 1500, 1500, 1500};
+/* Battery voltage divider
+    with 10k resistor and 4.7k resistor
+    batt @ 12.6v output ~ 4.1v
+    batt @ 10.5v output ~ 3.3v
+*/
+
+uint16_t channels[10] = {1500, 1500, 1000, 1500, 1500, 1500, 1500, 1500, 1500, 1500}; // Note:  ppm can only use 8 channels
+uint8_t c_channel = -1;
+
+uint16_t out[10] = {1500, 1500, 1000, 1500, 1500, 1500, 1500, 1500, 1500, 1500};
 
 volatile unsigned long last_time;
 
 void readPPM()
 {
-    int pulse_width = micros() - last_time;
+    uint16_t pulse_width = micros() - last_time;
     last_time = micros();
 
     if (c_channel == -1 || pulse_width > 4000)
@@ -109,15 +116,7 @@ void setup()
     mpu.setMagBias(184.57, 336.55, 24.76);
 }
 
-long last_print = 0, last_write = 0;
-
-void sendSensorData()
-{
-    // Concatenate the sensor data into a single string
-    String sensorData = "     ___" + String(Kp) + "," + String(Ki) + "," + String(Kd) + "," + String(pitch) + "," + String(roll) + "," + String(yaw) + "," + String(batteryPercent) + "___    ";
-    // Send the sensor data over Bluetooth
-    Serial.println(sensorData);
-}
+long last_write = 0;
 
 void loop()
 {
@@ -132,11 +131,14 @@ void loop()
     mapChannels(desiredRoll, desiredPitch, desiredYaw);
     calculatePID(desiredRoll, desiredPitch, desiredYaw);
     getData();
-    calculateBatteryVoltage();
+
+    batteryPercent = map(analogRead(BATTERYPIN) * 0.0049, 3.3, 4.1, 0, 100); // convert battery voltage to percentage
+
     if (millis() - last_write > 100 && sendData && channels[2] < 1080)
     {
         last_write = millis();
-        sendSensorData();
+        // need to save spaceee
+        Serial.println("     ___" + String(Kp) + "," + String(Ki) + "," + String(Kd) + "," + String(pitch) + "," + String(roll) + "," + String(yaw) + "," + String(batteryPercent) + "___    ");
     }
 
     out[2] = channels[2]; // no change to throttle, just pass through
@@ -154,7 +156,7 @@ void updateOutput()
 
 void printChannels()
 {
-    for (int i = 0; i < 10; i++)
+    for (uint8_t i = 0; i < 10; i++)
     {
         Serial.print(out[i]);
         Serial.print(" ");
@@ -199,12 +201,12 @@ void calculatePID(float desiredYaw, float desiredPitch, float desiredRoll)
     float pitchError = desiredPitch - pitch;
     float rollError = desiredRoll - roll;
 
-//
-#if DEBUG_EN
-    DEBUG(String("Yaw_Err" + yawError));
-    DEBUG(String("Pitch_Err" + pitchError));
-    DEBUG(String("Roll_Err" + rollError));
-#endif
+    //
+    // #if DEBUG_EN
+    //     DEBUG(String("Yaw_Err" + yawError));
+    //     DEBUG(String("Pitch_Err" + pitchError));
+    //     DEBUG(String("Roll_Err" + rollError));
+    // #endif
 
     aileronPID = rollError * Kp + (roll - prevRoll) * Kd + (rollError * Ki);
     elevatorPID = pitchError * Kp + (pitch - prevPitch) * Kd + (pitchError * Ki);
@@ -229,7 +231,7 @@ void rawMapChannels() // extend the coverage of the servos
     channels[1] = map(channels[1], 1000, 2000, 700, 2400);
     channels[3] = map(channels[3], 1000, 2000, 700, 2400);
 
-    isEnabled = (channels[4] > 1500) ? true : false;
+    isEnabled = channels[4] > 1500;
 }
 
 void mapChannels(float &desiredRoll, float &desiredPitch, float &desiredYaw)
@@ -259,16 +261,16 @@ void getData()
             writeToEEPROM = Serial.readStringUntil(',').toInt();
         }
         else if (command == "on")
-            sendData = true;
+            sendData = 1;
         else if (command == "off")
-            sendData = false;
+            sendData = 0;
         if (testControlSurfaces)
             selfTest();
-        testControlSurfaces = false;
+        testControlSurfaces = 0;
         if (writeToEEPROM && millis() - lastWriteEEPROM > 60000)
         {
             writeEEPROM();
-            writeToEEPROM = false;
+            writeToEEPROM = 0;
             lastWriteEEPROM = millis();
         }
     }
@@ -276,7 +278,7 @@ void getData()
 
 void selfTest() // test control surfaces
 {
-    for (int i = 0; i < 4; i++)
+    for (uint8_t i = 0; i < 4; i++)
     {
         if (i == 2)
             continue;
@@ -303,16 +305,4 @@ void writeEEPROM() // write PID values to EEPROM
     EEPROM.put(14, invertRudder);
     delay(1000);
     digitalWrite(LED_BUILTIN, LOW);
-}
-
-/*
-with 10k resistor and 4.7k resistor
-batt @ 12.6v output ~ 4.1v
-batt @ 10.5v output ~ 3.3v
-*/
-void calculateBatteryVoltage() // calculate battery voltage
-{
-    batteryVoltage = analogRead(BATT_PIN) * 0.0049;
-    batteryVoltage = map(batteryVoltage, 3.3, 4.1, 10.5, 12.6);
-    batteryPercent = map(batteryVoltage, 10.5, 12.6, 0, 100);
 }
