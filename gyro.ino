@@ -5,21 +5,35 @@
 #define ELEVATOR 5
 #define THROTTLE 6
 #define RUDDER 9
+#define BATTERYPIN A0
 
 #include <Servo.h>
 #include "MPU9250.h"
 #include <Wire.h>
+#include <EEPROM.h>
+
+#define DEBUG_EN 0 // enable debug mode
+#define DEBUG(x) Serial.println(x)
+#define BL_EN 1 // enable bluetooth mode
 
 Servo aileron, elevator, throttle, rudder;
 MPU9250 mpu;
 
-const float Kp = 3, Ki = 0.1, Kd = 1; // PID constants
+float Kp = 10, Ki = 0, Kd = 3; // PID constants
 
 bool isEnabled = false;
+bool testControlSurfaces = false;
+bool invertAileron = false, invertElevator = false, invertRudder = false;
+bool sendData = true; // send data over bluetooth
 
 float yaw,
     pitch, roll, prevYaw, prevPitch, prevRoll;
-uint8_t aileronPID, elevatorPID, rudderPID;
+int aileronPID, elevatorPID, rudderPID;
+
+bool writeToEEPROM = false;
+unsigned long lastWriteEEPROM = 0;
+
+float batteryPercent = 0;
 
 /*
     *  PPM receiver
@@ -33,10 +47,10 @@ uint8_t aileronPID, elevatorPID, rudderPID;
     channel 8 - aux 4
 
     */
-unsigned int channels[10] = {1000}; // Note:  ppm can only use 8 channels
+unsigned int channels[10] = {1500, 1500, 1000, 1500, 1500, 1500, 1500, 1500, 1500, 1500}; // Note:  ppm can only use 8 channels
 int c_channel = -1;
 
-unsigned int out[10] = {1000};
+unsigned int out[10] = {1500, 1500, 1000, 1500, 1500, 1500, 1500, 1500, 1500, 1500};
 
 volatile unsigned long last_time;
 
@@ -65,7 +79,9 @@ void setup()
     Serial.begin(115200); // initialize serial communication
     Wire.begin();
 
-    pinMode(RECVR_PIN, INPUT_PULLUP); // set pin 2 as input (receiver
+    pinMode(LED_BUILTIN, OUTPUT);
+    pinMode(RECVR_PIN, INPUT_PULLUP); // set pin 2 as input (receiver)
+    pinMode(BATTERYPIN, INPUT);
 
     attachInterrupt(digitalPinToInterrupt(RECVR_PIN), readPPM, RISING);
 
@@ -74,31 +90,58 @@ void setup()
     throttle.attach(THROTTLE);
     rudder.attach(RUDDER);
 
+    EEPROM.get(0, Kp);
+    EEPROM.get(4, Ki);
+    EEPROM.get(8, Kd);
+    EEPROM.get(12, invertAileron);
+    EEPROM.get(13, invertElevator);
+    EEPROM.get(14, invertRudder);
+
+    updateOutput();
+
     last_time = micros();
 
+    // mpu setup
     mpu.setup(0x68);
+    // change the following values to match your sensor
+    mpu.setAccBias(753.27, -446.93, 1055.02);
+    mpu.setGyroBias(41.95, 303.32, 113.12);
+    mpu.setMagBias(184.57, 336.55, 24.76);
 }
 
 long last_print = 0, last_write = 0;
 
+void sendSensorData()
+{
+    // Concatenate the sensor data into a single string
+    String sensorData = "     ___" + String(Kp) + "," + String(Ki) + "," + String(Kd) + "," + String(pitch) + "," + String(roll) + "," + String(yaw) + "," + String(batteryPercent) + "___    ";
+    // Send the sensor data over Bluetooth
+    Serial.println(sensorData);
+}
+
 void loop()
 {
-    if (millis() - last_print > 1000)
-    {
-        last_print = millis();
-        printChannels();
-    }
+    // if (millis() - last_print > 1000)
+    // {
+    //     last_print = millis();
+    //     printChannels();
+    // }
     float desiredYaw, desiredPitch, desiredRoll;
-
-    if (millis() - last_write > 10)
-    {
-        updateOutput();
-        last_write = millis();
-    }
     getAngles();
+    rawMapChannels();
     mapChannels(desiredRoll, desiredPitch, desiredYaw);
     calculatePID(desiredRoll, desiredPitch, desiredYaw);
+    getData();
+    calculateBatteryVoltage();
+    if (millis() - last_write > 100 && sendData && channels[2] < 1080)
+    {
+        last_write = millis();
+        sendSensorData();
+    }
+
     out[2] = channels[2]; // no change to throttle, just pass through
+
+    updateOutput();
 }
 
 void updateOutput()
@@ -118,8 +161,15 @@ void printChannels()
     }
     Serial.print("Is enabled: ");
     Serial.println(isEnabled);
-    Serial.print("pid: ");
-    Serial.println(aileronPID);
+    Serial.print("aileron pid: ");
+    Serial.println(out[0]);
+    Serial.print("Angles: ");
+    Serial.print("yaw: ");
+    Serial.print(yaw);
+    Serial.print(" pitch: ");
+    Serial.print(pitch);
+    Serial.print(" roll: ");
+    Serial.println(roll);
 }
 
 void getAngles() // get angles/direction from sensor
@@ -149,19 +199,37 @@ void calculatePID(float desiredYaw, float desiredPitch, float desiredRoll)
     float pitchError = desiredPitch - pitch;
     float rollError = desiredRoll - roll;
 
+//
+#if DEBUG_EN
+    DEBUG(String("Yaw_Err" + yawError));
+    DEBUG(String("Pitch_Err" + pitchError));
+    DEBUG(String("Roll_Err" + rollError));
+#endif
+
     aileronPID = rollError * Kp + (roll - prevRoll) * Kd + (rollError * Ki);
     elevatorPID = pitchError * Kp + (pitch - prevPitch) * Kd + (pitchError * Ki);
     // rudderPID = yawError * Kp + (yaw - prevYaw) * Kd + (yawError * Ki); // yaw pid disabled for now
 
     // constrain PID values
-    // aileronPID = constrain(aileronPID, 1000, 2000);
-    // elevatorPID = constrain(elevatorPID, 1000, 2000);
-    // rudderPID = constrain(rudderPID, 1000, 2000); // yaw pid disabled for now
 
     // write PID values to output
-    out[0] = channels[0] + ((isEnabled) ? aileronPID : 0);
-    out[1] = channels[1] + ((isEnabled) ? elevatorPID : 0);
+    out[0] = channels[0] + ((isEnabled) ? ((invertAileron) ? -aileronPID : aileronPID) : 0);
+    out[1] = channels[1] + ((isEnabled) ? ((invertElevator) ? -elevatorPID : elevatorPID) : 0);
     out[3] = channels[3]; //+ rudderPID; // yaw pid disabled for now
+    out[0] = constrain(out[0], 1000, 2000);
+    out[1] = constrain(out[1], 1000, 2000);
+    out[3] = constrain(out[3], 1000, 2000);
+}
+
+void rawMapChannels() // extend the coverage of the servos
+{
+    // map channels to control surfaces
+
+    channels[0] = map(channels[0], 1000, 2000, 700, 2400);
+    channels[1] = map(channels[1], 1000, 2000, 700, 2400);
+    channels[3] = map(channels[3], 1000, 2000, 700, 2400);
+
+    isEnabled = (channels[4] > 1500) ? true : false;
 }
 
 void mapChannels(float &desiredRoll, float &desiredPitch, float &desiredYaw)
@@ -171,6 +239,80 @@ void mapChannels(float &desiredRoll, float &desiredPitch, float &desiredYaw)
     desiredRoll = map(channels[0], 1000, 2000, -80, 80);
     desiredPitch = map(channels[1], 1000, 2000, -60, 90);
     desiredYaw = map(channels[3], 1000, 2000, -90, 90);
+}
 
-    isEnabled = (channels[4] > 1500) ? true : false;
+void getData()
+{ // get command from app
+    if (Serial.available() > 0)
+    {
+        String command = Serial.readStringUntil('\n');
+        Serial.println(command);
+        if (command == "set")
+        {
+            Kp = Serial.readStringUntil(',').toFloat();
+            Ki = Serial.readStringUntil(',').toFloat();
+            Kd = Serial.readStringUntil(',').toFloat();
+            invertAileron = Serial.readStringUntil(',').toInt();
+            invertElevator = Serial.readStringUntil(',').toInt();
+            invertRudder = Serial.readStringUntil(',').toInt();
+            testControlSurfaces = Serial.readStringUntil(',').toInt();
+            writeToEEPROM = Serial.readStringUntil(',').toInt();
+        }
+        else if (command == "on")
+            sendData = true;
+        else if (command == "off")
+            sendData = false;
+        if (testControlSurfaces)
+            selfTest();
+        testControlSurfaces = false;
+        if (writeToEEPROM && millis() - lastWriteEEPROM > 60000)
+        {
+            writeEEPROM();
+            writeToEEPROM = false;
+            lastWriteEEPROM = millis();
+        }
+    }
+}
+
+void selfTest() // test control surfaces
+{
+    for (int i = 0; i < 4; i++)
+    {
+        if (i == 2)
+            continue;
+        out[i] = 1000;
+        updateOutput();
+        delay(1000);
+        out[i] = 2000;
+        updateOutput();
+        delay(1000);
+        out[i] = 1500;
+        updateOutput();
+        delay(1000);
+    }
+}
+
+void writeEEPROM() // write PID values to EEPROM
+{
+    digitalWrite(LED_BUILTIN, HIGH);
+    EEPROM.put(0, Kp);
+    EEPROM.put(4, Ki);
+    EEPROM.put(8, Kd);
+    EEPROM.put(12, invertAileron);
+    EEPROM.put(13, invertElevator);
+    EEPROM.put(14, invertRudder);
+    delay(1000);
+    digitalWrite(LED_BUILTIN, LOW);
+}
+
+/*
+with 10k resistor and 4.7k resistor
+batt @ 12.6v output ~ 4.1v
+batt @ 10.5v output ~ 3.3v
+*/
+void calculateBatteryVoltage() // calculate battery voltage
+{
+    batteryVoltage = analogRead(BATT_PIN) * 0.0049;
+    batteryVoltage = map(batteryVoltage, 3.3, 4.1, 10.5, 12.6);
+    batteryPercent = map(batteryVoltage, 10.5, 12.6, 0, 100);
 }
