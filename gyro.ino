@@ -32,6 +32,7 @@ uint16_t aileronPID, elevatorPID, rudderPID;
 
 byte writeToEEPROM = 0;
 unsigned long lastWriteEEPROM = 0;
+uint16_t aileronMid = 1500, elevatorMid = 1500, rudderMid = 1500;
 
 float batteryPercent = 0;
 
@@ -111,9 +112,9 @@ void setup()
     // mpu setup
     mpu.setup(0x68);
     // change the following values to match your sensor
-    mpu.setAccBias(753.27, -446.93, 1055.02);
-    mpu.setGyroBias(41.95, 303.32, 113.12);
-    mpu.setMagBias(184.57, 336.55, 24.76);
+    mpu.setAccBias(-319.60, 434.20, 954.60);
+    mpu.setGyroBias(50.30, 307.02, 101.82);
+    mpu.setMagBias(202.84, 55.17, 90.21);
 }
 
 long last_write = 0;
@@ -127,14 +128,13 @@ void loop()
     // }
     float desiredYaw, desiredPitch, desiredRoll;
     getAngles();
-    rawMapChannels();
     mapChannels(desiredRoll, desiredPitch, desiredYaw);
     calculatePID(desiredRoll, desiredPitch, desiredYaw);
     getData();
 
-    batteryPercent = map(analogRead(BATTERYPIN) * 0.0049, 3.3, 4.1, 0, 100); // convert battery voltage to percentage
+    batteryPercent = ((float)analogRead(BATTERYPIN) * 0.0049 - 3.3) * 100 / 0.8; // convert battery voltage to percentage
 
-    if (millis() - last_write > 100 && sendData && channels[2] < 1080)
+    if (millis() - last_write > 50 && sendData && channels[2] < 1080)
     {
         last_write = millis();
         // need to save spaceee
@@ -148,6 +148,20 @@ void loop()
 
 void updateOutput()
 {
+    if (out[0] > 1950)
+        out[0] = 2150;
+    else if (out[0] < 1050)
+        out[0] = 850;
+    if (out[1] > 1950)
+        out[1] = 2150;
+    else if (out[1] < 1050)
+        out[1] = 850;
+    if (out[3] > 1950)
+        out[3] = 2150;
+    else if (out[3] < 1050)
+        out[3] = 850;
+
+    isEnabled = channels[4] > 1500;
     aileron.writeMicroseconds(out[0]);
     elevator.writeMicroseconds(out[1]);
     throttle.writeMicroseconds(out[2]);
@@ -215,23 +229,12 @@ void calculatePID(float desiredYaw, float desiredPitch, float desiredRoll)
     // constrain PID values
 
     // write PID values to output
-    out[0] = channels[0] + ((isEnabled) ? ((invertAileron) ? -aileronPID : aileronPID) : 0);
-    out[1] = channels[1] + ((isEnabled) ? ((invertElevator) ? -elevatorPID : elevatorPID) : 0);
+    out[0] = ((isEnabled) ? (aileronMid + ((invertAileron) ? -aileronPID : aileronPID)) : channels[0]);
+    out[1] = ((isEnabled) ? (elevatorMid + ((invertElevator) ? -elevatorPID : elevatorPID)) : channels[1]);
     out[3] = channels[3]; //+ rudderPID; // yaw pid disabled for now
-    out[0] = constrain(out[0], 1000, 2000);
-    out[1] = constrain(out[1], 1000, 2000);
-    out[3] = constrain(out[3], 1000, 2000);
-}
-
-void rawMapChannels() // extend the coverage of the servos
-{
-    // map channels to control surfaces
-
-    channels[0] = map(channels[0], 1000, 2000, 700, 2400);
-    channels[1] = map(channels[1], 1000, 2000, 700, 2400);
-    channels[3] = map(channels[3], 1000, 2000, 700, 2400);
-
-    isEnabled = channels[4] > 1500;
+    out[0] = constrain(out[0], 850, 2150);
+    out[1] = constrain(out[1], 850, 2150);
+    out[3] = constrain(out[3], 850, 2150);
 }
 
 void mapChannels(float &desiredRoll, float &desiredPitch, float &desiredYaw)
@@ -265,7 +268,11 @@ void getData()
         else if (command == "off")
             sendData = 0;
         if (testControlSurfaces)
+        {
+            aileronMid = channels[0];
+            elevatorMid = channels[1];
             selfTest();
+        }
         testControlSurfaces = 0;
         if (writeToEEPROM && millis() - lastWriteEEPROM > 60000)
         {
