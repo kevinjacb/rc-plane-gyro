@@ -27,7 +27,7 @@ byte invertAileron = 0, invertElevator = 0, invertRudder = 0;
 byte sendData = 1; // send data over bluetooth
 
 float yaw,
-    pitch, roll, prevYaw, prevPitch, prevRoll;
+    pitch, roll, prevYaw, prevPitch, prevRoll, pitchOffset = 0, rollOffset = 0, yawOffset = 0;
 uint16_t aileronPID, elevatorPID, rudderPID;
 
 byte writeToEEPROM = 0;
@@ -117,7 +117,7 @@ void setup()
     mpu.setMagBias(202.84, 55.17, 90.21);
 }
 
-long last_write = 0;
+long last_write = 0; // last_print = 0;
 
 void loop()
 {
@@ -129,7 +129,7 @@ void loop()
     float desiredYaw, desiredPitch, desiredRoll;
     getAngles();
     mapChannels(desiredRoll, desiredPitch, desiredYaw);
-    calculatePID(desiredRoll, desiredPitch, desiredYaw);
+    calculatePID(desiredYaw, desiredPitch, desiredRoll);
     getData();
 
     batteryPercent = ((float)analogRead(BATTERYPIN) * 0.0049 - 3.3) * 100 / 0.8; // convert battery voltage to percentage
@@ -168,25 +168,25 @@ void updateOutput()
     rudder.writeMicroseconds(out[3]);
 }
 
-void printChannels()
-{
-    for (uint8_t i = 0; i < 10; i++)
-    {
-        Serial.print(out[i]);
-        Serial.print(" ");
-    }
-    Serial.print("Is enabled: ");
-    Serial.println(isEnabled);
-    Serial.print("aileron pid: ");
-    Serial.println(out[0]);
-    Serial.print("Angles: ");
-    Serial.print("yaw: ");
-    Serial.print(yaw);
-    Serial.print(" pitch: ");
-    Serial.print(pitch);
-    Serial.print(" roll: ");
-    Serial.println(roll);
-}
+// void printChannels() // enable to debug
+// {
+//     for (uint8_t i = 0; i < 10; i++)
+//     {
+//         Serial.print(channels[i]);
+//         Serial.print(" ");
+//     }
+//     Serial.print("Is enabled: ");
+//     Serial.println(isEnabled);
+//     Serial.print("aileron pid: ");
+//     Serial.println(out[0]);
+//     Serial.print("Angles: ");
+//     Serial.print("yaw: ");
+//     Serial.print(yaw);
+//     Serial.print(" pitch: ");
+//     Serial.print(pitch);
+//     Serial.print(" roll: ");
+//     Serial.println(roll);
+// }
 
 void getAngles() // get angles/direction from sensor
 {
@@ -201,9 +201,9 @@ void getAngles() // get angles/direction from sensor
         prevPitch = pitch;
         prevRoll = roll;
 
-        yaw = mpu.getYaw();
-        pitch = mpu.getPitch();
-        roll = mpu.getRoll();
+        yaw = mpu.getYaw() - yawOffset;
+        pitch = mpu.getPitch() - pitchOffset;
+        roll = mpu.getRoll() - rollOffset;
     }
 }
 
@@ -211,9 +211,15 @@ void getAngles() // get angles/direction from sensor
 void calculatePID(float desiredYaw, float desiredPitch, float desiredRoll)
 {
     // calculate PID for each control surface
+    desiredPitch = -desiredPitch; // invert pitch
+    desiredRoll = -desiredRoll;   // invert roll
+
     float yawError = desiredYaw - yaw;
     float pitchError = desiredPitch - pitch;
     float rollError = desiredRoll - roll;
+
+    // pitchError = -pitchError; // invert pitch error
+    // rollError = -rollError;   // invert roll error
 
     //
     // #if DEBUG_EN
@@ -269,6 +275,8 @@ void getData()
             sendData = 0;
         if (testControlSurfaces)
         {
+            pitchOffset = pitch;
+            rollOffset = roll;
             aileronMid = channels[0];
             elevatorMid = channels[1];
             selfTest();
@@ -291,13 +299,13 @@ void selfTest() // test control surfaces
             continue;
         out[i] = 1000;
         updateOutput();
-        delay(1000);
+        delay(500);
         out[i] = 2000;
         updateOutput();
-        delay(1000);
+        delay(500);
         out[i] = 1500;
         updateOutput();
-        delay(1000);
+        delay(500);
     }
 }
 
